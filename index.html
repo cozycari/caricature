@@ -37,8 +37,8 @@ input{font:inherit;padding:12px;border:2px solid var(--bd);border-radius:12px;wi
 
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getFirestore,doc,onSnapshot,runTransaction,setDoc,updateDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import {getAuth,signInWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getFirestore,doc,collection,onSnapshot,runTransaction,setDoc,updateDoc,deleteDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getAuth,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 // ▼▼ Firebase 콘솔 > 프로젝트 설정 > 내 앱(웹)에서 복사한 값으로 교체 ▼▼
 const firebaseConfig={
@@ -120,7 +120,7 @@ function renderUser(){
   <div class="card"><div class="lbl">카카오톡으로 호출 알림 받기</div>
     <p class="hint">오픈채팅방에 입장하시고 <b>내 번호</b>를 남겨주세요.</p>
     <a class="btn kakao" href="${KAKAO}" target="_blank" rel="noopener">💬 카카오톡 오픈채팅 입장</a></div>
-  <div class="card notice">⚠️ 예상 시간보다 <b>다소 지연될 수 있습니다.</b><br>봉사자들이 정성껏 그리고 있으니 너그러운 양해 부탁드립니다. 🙏</div>
+  <div class="card notice">⚠️ 예상 시간보다 <b>다소 지연될 수 있습니다.</b><br>봉사자들이 정성껏 그리고 있으니 너그러운 양해 부탁드립니다. 🙏<br><br>⏰ <b>호출 시간에 맞춰 방문해 주세요.</b><br>정해진 시간에 오시지 않으면 처음부터 다시 접수하셔야 합니다. 모두를 위한 약속이니 시간을 꼭 지켜주세요.</div>
   <div style="text-align:center"><a href="#admin" class="hint" style="font-size:14px">운영자</a></div>`;
   document.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{party=+b.dataset.p;renderUser()});
   const tk=document.getElementById("take");
@@ -132,7 +132,7 @@ function renderUser(){
     catch(e){alert(e.message==="closed"?"접수가 마감되었습니다.":"접수 실패. 다시 시도해주세요.");renderUser()}};
 }
 
-function renderAdmin(){
+function renderPanel(){
   if(!user){$.innerHTML=`<div class="card"><div class="lbl">운영자 로그인</div><input id="em" type="email" placeholder="이메일"><input id="pw" type="password" placeholder="비밀번호"><button id="li">로그인</button><div class="hint">${msg}</div><br><a href="#">← 돌아가기</a></div>`;
     document.getElementById("li").onclick=async()=>{try{await signInWithEmailAndPassword(auth,em.value,pw.value);msg=""}catch(e){msg="로그인 실패";renderAdmin()}};return}
   if(!S){$.innerHTML=`<div class="card">아직 초기화되지 않았습니다.<br><button id="init">시스템 초기화</button></div>`;
@@ -170,9 +170,66 @@ function renderAdmin(){
   document.getElementById("lo").onclick=()=>signOut(auth);
 }
 
+
+const esc=t=>String(t==null?"":t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const F={mode:"login",name:"",msg:"",email:"",pw:""};
+let staff=null,req=null,staffLoaded=false,reqLoaded=false,reqs=[],staffList=[],unsubs=[],ownerSub=false;
+const errTxt=e=>({"auth/email-already-in-use":"이미 가입된 메일입니다. '로그인'을 눌러주세요.","auth/weak-password":"비밀번호는 6자 이상이어야 합니다.","auth/invalid-email":"메일 주소를 확인해주세요."}[e.code]||"실패했습니다. 입력을 확인해주세요.");
+const bind=()=>document.querySelectorAll("[data-f]").forEach(i=>i.oninput=()=>{F[i.dataset.f]=i.value});
+const fld=(k,ph,type="text")=>`<input data-f="${k}" type="${type}" placeholder="${ph}" value="${esc(F[k])}">`;
+const G=id=>document.getElementById(id);
+
+function renderAdmin(){
+  if(!user)return renderLogin();
+  if(!staffLoaded||!reqLoaded){$.innerHTML='<div class="card">확인 중…</div>';return}
+  if(!staff)return renderPending();
+  renderPanel();
+  if(staff.role==="owner")ownerCards();
+}
+function renderLogin(){
+  const su=F.mode==="signup";
+  $.innerHTML=`<div class="card"><div class="nums"><button class="${su?"g":""}" id="m1">로그인</button><button class="${su?"":"g"}" id="m2">운영자 가입 요청</button></div>
+  ${su?`<p class="hint">이름과 소개를 적어 요청하시면 담당자가 확인 후 승인합니다.</p>${fld("name","이름 (예: 홍길동)")}${fld("msg","나 누군데 (예: 캐리커쳐 봉사단 ○○팀)")}`:""}
+  ${fld("email","이메일","email")}${fld("pw","비밀번호 (6자 이상)","password")}
+  <button id="go">${su?"가입 요청 보내기":"로그인"}</button><div class="hint" id="er">${esc(msg)}</div><br><a href="#">← 돌아가기</a></div>`;
+  bind();
+  G("m1").onclick=()=>{F.mode="login";msg="";renderLogin()};G("m2").onclick=()=>{F.mode="signup";msg="";renderLogin()};
+  G("go").onclick=async()=>{
+    try{
+      if(su){if(!F.name.trim()||!F.msg.trim()){msg="이름과 소개를 적어주세요.";return renderLogin()}
+        const c=await createUserWithEmailAndPassword(auth,F.email,F.pw);
+        await setDoc(doc(db,"requests",c.user.uid),{email:F.email,name:F.name.trim(),msg:F.msg.trim(),status:"pending",at:Date.now()})}
+      else await signInWithEmailAndPassword(auth,F.email,F.pw);
+      msg="";F.pw=""}catch(e){msg=su?errTxt(e):"로그인 실패 (메일/비밀번호 확인)";renderLogin()}};
+}
+function renderPending(){
+  $.innerHTML=req?`<div class="card"><div class="big" style="font-size:40px">⏳ 승인 대기 중</div><p>${esc(req.name)}님의 요청이 접수되었습니다.<br>담당자가 승인하면 이 페이지를 새로고침해 주세요.</p><div class="hint">${esc(req.email)}</div><br><button class="g" id="lo2">로그아웃</button></div>`
+  :`<div class="card"><div class="lbl">운영자 권한이 없습니다</div><p class="hint">가입 요청을 보내면 담당자가 승인합니다.</p>${fld("name","이름")}${fld("msg","나 누군데 (소속/역할)")}<button id="rq">요청 보내기</button> <button class="g" id="lo2">로그아웃</button></div>`;
+  bind();G("lo2").onclick=()=>signOut(auth);
+  const r=G("rq");if(r)r.onclick=()=>{if(!F.name.trim()||!F.msg.trim())return alert("이름과 소개를 적어주세요.");
+    setDoc(doc(db,"requests",user.uid),{email:user.email,name:F.name.trim(),msg:F.msg.trim(),status:"pending",at:Date.now()})};
+}
+function ownerCards(){
+  if(!ownerSub){ownerSub=true;
+    unsubs.push(onSnapshot(collection(db,"requests"),x=>{reqs=x.docs.map(d=>({id:d.id,...d.data()}));render()}));
+    unsubs.push(onSnapshot(collection(db,"staff"),x=>{staffList=x.docs.map(d=>({id:d.id,...d.data()}));render()}))}
+  if(reqs.length)$.insertAdjacentHTML("afterbegin",`<div class="card" style="border-color:var(--warn)"><div class="lbl">🔔 운영자 가입 요청 ${reqs.length}건</div>${reqs.map(r=>`<div class="tbl"><span><b>${esc(r.name)}</b> · ${esc(r.email)}<br><span class="hint">${esc(r.msg)}</span></span><span><button class="ok" data-ok="${r.id}">승인</button> <button class="r" data-no="${r.id}">거절</button></span></div>`).join("")}</div>`);
+  $.insertAdjacentHTML("beforeend",`<div class="card"><div class="lbl">운영자 목록</div>${staffList.map(m=>`<div class="tbl"><span>${esc(m.name||"")} · ${esc(m.email||"")} ${m.role==="owner"?"👑":""}</span>${m.role==="owner"?"":`<button class="g" data-rm="${m.id}">해제</button>`}</div>`).join("")}</div>`);
+  document.querySelectorAll("[data-ok]").forEach(b=>b.onclick=async()=>{const r=reqs.find(x=>x.id===b.dataset.ok);
+    await setDoc(doc(db,"staff",r.id),{email:r.email,name:r.name,role:"staff"});await deleteDoc(doc(db,"requests",r.id))});
+  document.querySelectorAll("[data-no]").forEach(b=>b.onclick=()=>confirm("거절할까요?")&&deleteDoc(doc(db,"requests",b.dataset.no)));
+  document.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>confirm("운영자 권한을 해제할까요?")&&deleteDoc(doc(db,"staff",b.dataset.rm)));
+}
+
 const render=()=>{if(document.activeElement&&document.activeElement.tagName==="INPUT")return;isAdmin()?renderAdmin():renderUser()};
 onSnapshot(ref,s=>{S=s.exists()?s.data():null;render()},()=>{$.innerHTML='<div class="card">연결에 문제가 있습니다. 새로고침 해주세요.</div>'});
-onAuthStateChanged(auth,u=>{user=u;render()});
+onAuthStateChanged(auth,u=>{
+  unsubs.forEach(f=>f());unsubs=[];staff=null;req=null;staffLoaded=reqLoaded=false;ownerSub=false;reqs=[];staffList=[];user=u;
+  if(u){
+    unsubs.push(onSnapshot(doc(db,"staff",u.uid),x=>{staff=x.exists()?x.data():null;staffLoaded=true;render()},()=>{staffLoaded=true;render()}));
+    unsubs.push(onSnapshot(doc(db,"requests",u.uid),x=>{req=x.exists()?x.data():null;reqLoaded=true;render()},()=>{reqLoaded=true;render()}));
+  }
+  render()});
 window.addEventListener("hashchange",render);
 setInterval(render,30000); // 예상시간 갱신(서버 읽기 없음)
 </script>
