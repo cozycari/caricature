@@ -31,7 +31,7 @@ input{font:inherit;padding:12px;border:2px solid var(--bd);border-radius:12px;wi
 </style>
 </head>
 <body>
-<header><h1>🎨 캐리커쳐 현장 대기</h1><p>사)남양주자원봉사센터 캐리커쳐 봉사단</p></header>
+<header><h1>🎨 캐리커쳐 현장 예약 </h1><p>사)남양주자원봉사센터 캐리커쳐 봉사단</p></header>
 <main id="app"><div class="card">불러오는 중…</div></main>
 
 <script type="module">
@@ -52,7 +52,7 @@ const firebaseConfig={
 };
 const KAKAO="https://open.kakao.com/o/pOFJ9BUi";
 const MIN=20;          // 대기번호 1장당 소요시간(분)
-const PRE=3;           // '미리 와 계세요' 안내 인원
+const PRE=3;           // '미리 대기해 주세요' 안내 인원
 // ▲▲▲▲▲
 
 const app=initializeApp(firebaseConfig),db=getFirestore(app),auth=getAuth(app);
@@ -101,8 +101,8 @@ function renderUser(){
     ${my&&my>=S.nextNumber?'<div class="hint">이미 번호를 받으셨습니다</div>':'<button id="take" style="font-size:30px;width:100%">대기번호 받기</button>'}
     <div class="hint" style="margin-top:8px">1인 약 ${MIN}분 · 진행 테이블 ${S.tableCount}개</div></div>
   <div class="card"><div class="lbl">카카오톡으로 호출 알림 받기</div>
-    <p class="hint">오픈채팅방에 입장하시고 <b>내 번호</b>를 남겨주세요.</p>
-    <a class="btn kakao" href="${KAKAO}" target="_blank" rel="noopener">💬 카카오톡 오픈채팅 입장</a></div>
+    <p class="hint">오픈채팅방에 입장하시고 <b>알림</b> 켜두시면 미방문시 안내해드립니다. </p>
+    <a class="btn kakao" href="${KAKAO}" target="_blank" rel="noopener">💬 카카오톡 오픈채팅 입장 : 닉넴 대기번호 </a></div>
   <div class="card notice">⚠️ 예상 시간보다 <b>다소 지연될 수 있습니다.</b><br>봉사자들이 정성껏 그리고 있으니 너그러운 양해 부탁드립니다. 🙏</div>
   <div style="text-align:center"><a href="#admin" class="hint" style="font-size:14px">운영자</a></div>`;
   const t=document.getElementById("take");
