@@ -173,7 +173,7 @@ function renderPanel(){
 
 const esc=t=>String(t==null?"":t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const F={mode:"login",name:"",msg:"",email:"",pw:""};
-let staff=null,req=null,staffLoaded=false,reqLoaded=false,reqs=[],staffList=[],unsubs=[],ownerSub=false;
+let staff=null,req=null,staffLoaded=false,reqLoaded=false,reqs=[],staffList=[],unsubs=[],ownerSub=false,ownerErr="";
 const errTxt=e=>({"auth/email-already-in-use":"이미 가입된 메일입니다. '로그인'을 눌러주세요.","auth/weak-password":"비밀번호는 6자 이상이어야 합니다.","auth/invalid-email":"메일 주소를 확인해주세요."}[e.code]||"실패했습니다. 입력을 확인해주세요.");
 const bind=()=>document.querySelectorAll("[data-f]").forEach(i=>i.oninput=()=>{F[i.dataset.f]=i.value});
 const fld=(k,ph,type="text")=>`<input data-f="${k}" type="${type}" placeholder="${ph}" value="${esc(F[k])}">`;
@@ -185,6 +185,7 @@ function renderAdmin(){
   if(!staff)return renderPending();
   renderPanel();
   if(staff.role==="owner")ownerCards();
+  else $.insertAdjacentHTML("beforeend",`<div class="card hint">내 권한: <b>${esc(staff.role)}</b><br>가입 요청 승인은 role이 정확히 <b>owner</b>(소문자, 공백 없음)인 계정에서만 보입니다.</div>`);
 }
 function renderLogin(){
   const su=F.mode==="signup";
@@ -211,8 +212,9 @@ function renderPending(){
 }
 function ownerCards(){
   if(!ownerSub){ownerSub=true;
-    unsubs.push(onSnapshot(collection(db,"requests"),x=>{reqs=x.docs.map(d=>({id:d.id,...d.data()}));render()}));
-    unsubs.push(onSnapshot(collection(db,"staff"),x=>{staffList=x.docs.map(d=>({id:d.id,...d.data()}));render()}))}
+    unsubs.push(onSnapshot(collection(db,"requests"),x=>{reqs=x.docs.map(d=>({id:d.id,...d.data()}));ownerErr="";render()},e=>{ownerErr="가입 요청 목록을 불러오지 못했습니다 ("+e.code+")";render()}));
+    unsubs.push(onSnapshot(collection(db,"staff"),x=>{staffList=x.docs.map(d=>({id:d.id,...d.data()}));render()},()=>{}))}
+  if(ownerErr)$.insertAdjacentHTML("afterbegin",`<div class="card notice">⚠️ ${esc(ownerErr)}<br>Firestore 규칙(requests 읽기)이 최신 버전인지 확인해주세요.</div>`);
   if(reqs.length)$.insertAdjacentHTML("afterbegin",`<div class="card" style="border-color:var(--warn)"><div class="lbl">🔔 운영자 가입 요청 ${reqs.length}건</div>${reqs.map(r=>`<div class="tbl"><span><b>${esc(r.name)}</b> · ${esc(r.email)}<br><span class="hint">${esc(r.msg)}</span></span><span><button class="ok" data-ok="${r.id}">승인</button> <button class="r" data-no="${r.id}">거절</button></span></div>`).join("")}</div>`);
   $.insertAdjacentHTML("beforeend",`<div class="card"><div class="lbl">운영자 목록</div>${staffList.map(m=>`<div class="tbl"><span>${esc(m.name||"")} · ${esc(m.email||"")} ${m.role==="owner"?"👑":""}</span>${m.role==="owner"?"":`<button class="g" data-rm="${m.id}">해제</button>`}</div>`).join("")}</div>`);
   document.querySelectorAll("[data-ok]").forEach(b=>b.onclick=async()=>{const r=reqs.find(x=>x.id===b.dataset.ok);
@@ -224,7 +226,7 @@ function ownerCards(){
 const render=()=>{if(document.activeElement&&document.activeElement.tagName==="INPUT")return;isAdmin()?renderAdmin():renderUser()};
 onSnapshot(ref,s=>{S=s.exists()?s.data():null;render()},()=>{$.innerHTML='<div class="card">연결에 문제가 있습니다. 새로고침 해주세요.</div>'});
 onAuthStateChanged(auth,u=>{
-  unsubs.forEach(f=>f());unsubs=[];staff=null;req=null;staffLoaded=reqLoaded=false;ownerSub=false;reqs=[];staffList=[];user=u;
+  unsubs.forEach(f=>f());unsubs=[];staff=null;req=null;staffLoaded=reqLoaded=false;ownerSub=false;ownerErr="";reqs=[];staffList=[];user=u;
   if(u){
     unsubs.push(onSnapshot(doc(db,"staff",u.uid),x=>{staff=x.exists()?x.data():null;staffLoaded=true;render()},()=>{staffLoaded=true;render()}));
     unsubs.push(onSnapshot(doc(db,"requests",u.uid),x=>{req=x.exists()?x.data():null;reqLoaded=true;render()},()=>{reqLoaded=true;render()}));
