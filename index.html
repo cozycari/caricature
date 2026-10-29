@@ -20,7 +20,7 @@ main{max-width:640px;margin:0 auto;padding:12px}
 .chip.p{background:#fff1dd;color:var(--warn)}
 .hint{font-size:20px;color:var(--sub)}
 button,.btn{font:inherit;font-weight:700;border:0;border-radius:16px;padding:16px 22px;background:var(--pri);color:#fff;cursor:pointer;display:inline-block;text-decoration:none;min-height:56px}
-button.g{background:#777}button.r{background:#c0392b}button.ok{background:var(--ok)}
+button.g{background:#777}button.o{background:var(--warn)}button.r{background:#c0392b}button.ok{background:var(--ok)}
 button:disabled{opacity:.4}
 .kakao{background:#fee500;color:#191600;width:100%;font-size:24px}
 .mine{border-color:var(--pri);background:#f4f8ff}
@@ -88,7 +88,7 @@ const waitTxt=n=>{const s=startAt(n),m=mins(s-Date.now());return m<=0?`<b>지금
 function working(){return S.tables.slice(0,S.tableCount).map(t=>t.num).filter(Boolean)}
 function pre(){
   if(S.preMode==="manual")return (S.preList||[]).filter(n=>n>=S.nextNumber&&n<=S.lastIssued).sort((a,b)=>a-b);
-  const a=[];for(let n=S.nextNumber;n<=S.lastIssued&&a.length<PRE;n++)a.push(n);return a}
+  const a=[],N=S.preN||PRE;for(let n=S.nextNumber;n<=S.lastIssued&&a.length<N;n++)a.push(n);return a}
 const pc=n=>(S.parties&&S.parties[n])||1;
 
 function renderUser(){
@@ -138,15 +138,16 @@ function renderAdmin(){
   if(!S){$.innerHTML=`<div class="card">아직 초기화되지 않았습니다.<br><button id="init">시스템 초기화</button></div>`;
     document.getElementById("init").onclick=()=>setDoc(ref,blank());return}
   const waiting=Math.max(0,S.lastIssued-S.nextNumber+1),cur=pre();
-  const ct=S.closeAt?new Date(S.closeAt).toTimeString().slice(0,5):"";
+  const ctVal=S.closeAt?new Date(S.closeAt).toTimeString().slice(0,5):"";
   const wl=[];for(let n=S.nextNumber;n<=S.lastIssued&&wl.length<20;n++)wl.push(n);
   $.innerHTML=`<div class="card"><div class="lbl">운영 현황</div><div style="font-size:26px">발급 ${S.lastIssued}번 · 대기 <b>${waiting}</b>명 · 다음 호출 ${S.nextNumber}번</div>
    <div class="tbl"><span>작업 테이블 수</span><span><button class="g" id="dn">−</button> <b style="font-size:34px">${S.tableCount}</b> <button id="up">＋</button></span></div>
-   <div class="tbl"><span>행사 마감시각</span><span><input id="ct" type="time" value="${ct}" style="width:auto"> <button class="g" id="cx">해제</button></span></div>
+   <div class="tbl"><span>행사 마감시각</span><span><input id="ct" type="time" value="${ctVal}" style="width:auto"> <button class="g" id="cx">해제</button></span></div>
    <div class="hint" style="text-align:left">${S.closeAt?`마감 ${fmt(S.closeAt)} → 접수 가능 마지막 번호 <b>${lastOk()}번</b> (작업 ${MIN}분 포함, 자동 계산)`:"마감시각을 정하면 접수 가능 시간이 자동 계산됩니다."}</div></div>
   <div class="card"><div class="lbl">미리 와 계세요 번호 (${S.preMode==="manual"?"직접 설정":"자동"})</div>
-   <div class="nums">${wl.length?wl.map(n=>`<button class="${cur.includes(n)?"":"g"}" data-pre="${n}">${n}번${pc(n)>1?" (2명)":""}</button>`).join(""):'<span class="hint">대기자 없음</span>'}</div>
-   <div class="hint">번호를 눌러 켜고 끄세요 (주황=안내 중)</div><button class="g" id="auto">자동(앞 ${PRE}명)으로</button></div>
+   <div class="nums">${wl.length?wl.map(n=>`<button class="${cur.includes(n)?"o":"g"}" data-pre="${n}">${n}번${pc(n)>1?" (2명)":""}</button>`).join(""):'<span class="hint">대기자 없음</span>'}</div>
+   <div class="hint">번호를 눌러 켜고 끄세요 (주황=안내 중)</div><div class="tbl"><span>자동 안내 인원</span><span><button class="g" id="pd">−</button> <b style="font-size:34px">${S.preN||PRE}</b> <button id="pu">＋</button></span></div>
+   <button class="g" id="auto">자동 모드로 (앞 ${S.preN||PRE}명)</button></div>
   ${S.tables.slice(0,S.tableCount).map((t,i)=>`<div class="card"><div class="lbl">테이블 ${i+1}</div>
     <div class="big" style="font-size:56px">${t.num?t.num+"번 ("+pc(t.num)+"명)":"비어있음"}</div>
     ${t.num?`<div class="hint">${fmt(t.startedAt)} 시작</div><button class="r" data-done="${i}">작업 완료</button> `:""}
@@ -154,16 +155,19 @@ function renderAdmin(){
   <div class="card"><button class="g" id="rs">전체 초기화 (행사 시작 전)</button> <button class="g" id="lo">로그아웃</button><br><a href="#">← 손님 화면</a></div>`;
   const save=o=>updateDoc(ref,o);
   const tb=()=>S.tables.map(t=>({...t}));
-  up.onclick=()=>S.tableCount<5&&save({tableCount:S.tableCount+1});
-  dn.onclick=()=>S.tableCount>1&&save({tableCount:S.tableCount-1});
-  ct.onchange=()=>{if(!ct.value)return;const[h,m]=ct.value.split(":");const d=new Date();d.setHours(+h,+m,0,0);save({closeAt:d.getTime()})};
-  cx.onclick=()=>save({closeAt:0});
+  document.getElementById("up").onclick=()=>S.tableCount<5&&save({tableCount:S.tableCount+1});
+  document.getElementById("dn").onclick=()=>S.tableCount>1&&save({tableCount:S.tableCount-1});
+  const $i=id=>document.getElementById(id);
+  $i("ct").onchange=e=>{const v=e.target.value;if(!v)return;const[h,m]=v.split(":");const d=new Date();d.setHours(+h,+m,0,0);save({closeAt:d.getTime()});e.target.blur()};
+  document.getElementById("cx").onclick=()=>save({closeAt:0});
   document.querySelectorAll("[data-pre]").forEach(b=>b.onclick=()=>{const n=+b.dataset.pre;save({preMode:"manual",preList:cur.includes(n)?cur.filter(x=>x!==n):[...cur,n]})});
-  auto.onclick=()=>save({preMode:"auto",preList:[]});
+  document.getElementById("pu").onclick=()=>save({preN:Math.min(10,(S.preN||PRE)+1),preMode:"auto",preList:[]});
+  document.getElementById("pd").onclick=()=>save({preN:Math.max(0,(S.preN||PRE)-1),preMode:"auto",preList:[]});
+  document.getElementById("auto").onclick=()=>save({preMode:"auto",preList:[]});
   document.querySelectorAll("[data-call]").forEach(b=>b.onclick=()=>{const t=tb();t[+b.dataset.call]={num:S.nextNumber,startedAt:Date.now()};save({tables:t,nextNumber:S.nextNumber+1})});
   document.querySelectorAll("[data-done]").forEach(b=>b.onclick=()=>{const t=tb();t[+b.dataset.done]={num:0,startedAt:0};save({tables:t})});
-  rs.onclick=()=>confirm("모든 번호를 0으로 초기화합니다. 계속할까요?")&&setDoc(ref,blank());
-  lo.onclick=()=>signOut(auth);
+  document.getElementById("rs").onclick=()=>confirm("모든 번호를 0으로 초기화합니다. 계속할까요?")&&setDoc(ref,blank());
+  document.getElementById("lo").onclick=()=>signOut(auth);
 }
 
 const render=()=>{if(document.activeElement&&document.activeElement.tagName==="INPUT")return;isAdmin()?renderAdmin():renderUser()};
