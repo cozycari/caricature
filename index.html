@@ -37,7 +37,7 @@ input{font:inherit;padding:12px;border:2px solid var(--bd);border-radius:12px;wi
 
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getFirestore,doc,collection,onSnapshot,runTransaction,setDoc,updateDoc,deleteDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getFirestore,doc,collection,onSnapshot,runTransaction,setDoc,updateDoc,deleteDoc,arrayUnion} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {getAuth,signInWithEmailAndPassword,createUserWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 // ▼▼ Firebase 콘솔 > 프로젝트 설정 > 내 앱(웹)에서 복사한 값으로 교체 ▼▼
@@ -52,6 +52,7 @@ const firebaseConfig={
 };
 const KAKAO="https://open.kakao.com/o/pOFJ9BUi";
 const MIN=20;          // 대기번호 1장당 소요시간(분)
+const OPEN_BEFORE=10;  // 행사 시작 몇 분 전부터 발권할지
 const PRE=3;           // '미리 와 계세요' 안내 인원
 // ▲▲▲▲▲
 
@@ -61,115 +62,148 @@ const $=document.getElementById("app");
 const isAdmin=()=>location.hash==="#admin";
 let S=null,user=null,msg="";
 
-const blank=()=>({ev:Date.now(),lastIssued:0,nextNumber:1,tableCount:1,closeAt:0,preMode:"auto",preList:[],parties:{},tables:Array.from({length:5},()=>({num:0,startedAt:0}))});
+const blank=()=>({ev:Date.now(),lastIssued:0,nextNumber:1,tableCount:1,openAt:0,closeAt:0,preMode:"auto",preList:[],preN:PRE,parties:{},canceled:{},noshow:[],log:[],names:["","","","",""],tables:Array.from({length:5},()=>({num:0,startedAt:0}))});
 const fmt=t=>new Date(t).toLocaleTimeString("ko-KR",{hour:"numeric",minute:"2-digit"});
 const mins=ms=>Math.max(0,Math.ceil(ms/60000));
-let party=1;
-// 내 번호: 이 기기에 기억 (행사 초기화 시 자동 무효)
-function myT(){try{const t=JSON.parse(localStorage.getItem("ticket"));return t&&S&&t.ev===(S.ev||0)?t:null}catch(e){return null}}
+const dur=ms=>{const m=Math.round(ms/60000);return m>=60?Math.floor(m/60)+"시간 "+(m%60)+"분":m+"분"};
+let party=1,confirming=false;
+const cn=(n,st=S)=>!!(st.canceled&&st.canceled[n]);
+const PN=()=>S.preN==null?PRE:S.preN;
+const opened=(st=S)=>!!st.openAt&&Date.now()>=st.openAt-OPEN_BEFORE*60000;
+function nextAct(st=S){let n=st.nextNumber;while(n<=st.lastIssued&&cn(n,st))n++;return n}
+const waitN=()=>{let c=0;for(let k=S.nextNumber;k<=S.lastIssued;k++)if(!cn(k))c++;return c};
+const aheadOf=m=>{let c=0;for(let k=S.nextNumber;k<m;k++)if(!cn(k))c++;return c};
+// 내 번호: 이 기기에 기억 (초기화되거나 미방문 처리되면 무효)
+function myT(){try{const t=JSON.parse(localStorage.getItem("ticket"));return t&&S&&t.ev===(S.ev||0)&&!(S.noshow||[]).includes(t.no)?t:null}catch(e){return null}}
 
-// 번호 n의 작업 시작 예상시각 (테이블 종료시각+대기순서 반영, 테이블이 늘면 자동으로 빨라짐)
+// 번호 n의 작업 시작 예상시각 (취소 번호는 건너뜀, 테이블이 늘면 자동으로 빨라짐)
 function startAt(n,st=S){
   const now=Date.now();
   const free=st.tables.slice(0,st.tableCount).map(t=>t.num?Math.max(now,t.startedAt+MIN*60000):now);
   for(let k=st.nextNumber;k<=n;k++){
+    if(cn(k,st))continue;
     let i=0;free.forEach((f,j)=>{if(f<free[i])i=j});
     const s=free[i];free[i]=s+MIN*60000;
     if(k===n)return s;
   }
   return now;
 }
-// 마감시간 안에 작업이 끝나는가?
 const fit=(n,st=S)=>!st.closeAt||startAt(n,st)+MIN*60000<=st.closeAt;
-// 접수 가능한 마지막 번호 (마감시간을 설정했을 때만)
 function lastOk(st=S){let m=0;while(m<300&&fit(st.lastIssued+m+1,st))m++;return st.lastIssued+m}
 const waitTxt=n=>{const s=startAt(n),m=mins(s-Date.now());return m<=0?`<b>지금 바로</b> 가능 (${fmt(s)})`:`약 <b>${m}분</b> 후 · ${fmt(s)} 시작 예상`};
 
 function working(){return S.tables.slice(0,S.tableCount).map(t=>t.num).filter(Boolean)}
 function pre(){
-  if(S.preMode==="manual")return (S.preList||[]).filter(n=>n>=S.nextNumber&&n<=S.lastIssued).sort((a,b)=>a-b);
-  const a=[],N=S.preN||PRE;for(let n=S.nextNumber;n<=S.lastIssued&&a.length<N;n++)a.push(n);return a}
+  if(S.preMode==="manual")return (S.preList||[]).filter(n=>n>=S.nextNumber&&n<=S.lastIssued&&!cn(n)).sort((a,b)=>a-b);
+  const a=[];for(let n=S.nextNumber;n<=S.lastIssued&&a.length<PN();n++)if(!cn(n))a.push(n);return a}
 const pc=n=>(S.parties&&S.parties[n])||1;
+const NM=()=>{const a=[...(S.names||[])];while(a.length<5)a.push("");return a};
+const wk=i=>{const w=NM()[i].split(/[,，]/).map(x=>x.trim()).filter(Boolean);return w.length?w:["테이블"+(i+1)]};
+function stats(){const L=S.log||[],W={};let ppl=0;L.forEach(x=>{ppl+=x.p||1;x.w.forEach(nm=>{const o=W[nm]||(W[nm]={c:0,ms:0});o.c++;o.ms+=x.e-x.s})});return{L,W,ppl}}
 
 function renderUser(){
   if(!S){$.innerHTML='<div class="card">현장 접수 준비 중입니다.<br>잠시 후 다시 확인해주세요.</div>';return}
-  const w=working(),p=pre(),t=myT(),my=t?t.no:0,next=S.lastIssued+1;
-  const done=my&&my<S.nextNumber;
+  const w=working(),p=pre(),t=myT(),my=t?t.no:0,next=S.lastIssued+1,can=my&&cn(my);
+  const isWork=my&&w.includes(my),done=my&&!can&&!isWork&&my<S.nextNumber,waiting=my&&!can&&!isWork&&!done;
+  if(confirming&&waiting){
+    $.innerHTML=`<div class="card notice" style="text-align:center"><div class="big" style="font-size:40px">정말 취소하시겠어요?</div><p><b>${my}번</b> 대기를 취소합니다.<br><b>취소하면 오늘 행사에서는 다시 접수할 수 없습니다.</b></p><button class="r" id="yes" style="width:100%">네, 취소합니다</button><br><br><button class="g" id="no" style="width:100%">아니오, 계속 기다릴게요</button></div>`;
+    document.getElementById("no").onclick=()=>{confirming=false;renderUser()};
+    document.getElementById("yes").onclick=async()=>{try{await runTransaction(db,async tx=>{tx.update(ref,{["canceled."+my]:true})});confirming=false}catch(e){alert("취소 실패. 다시 시도해주세요.")}renderUser()};
+    return}
   let mineHtml="";
   if(my){
     let st;
-    if(w.includes(my))st=`<div class="big" style="color:var(--ok)">작업 중</div><div class="hint">테이블로 와주세요 🙌</div>`;
+    if(can)st=`<div class="big" style="color:#c0392b;font-size:48px">(취소)</div><div class="hint">대기가 취소되었습니다.<br>오늘은 다시 접수할 수 없습니다.</div>`;
+    else if(isWork)st=`<div class="big" style="color:var(--ok)">작업 중</div><div class="hint">테이블로 와주세요 🙌</div>`;
     else if(done)st=`<div class="big">완료</div><div class="hint">참여해 주셔서 감사합니다 💙<br>오늘은 1인 1회 참여입니다.</div>`;
-    else{const ahead=my-S.nextNumber;st=`<div class="hint">내 앞 대기 <b>${ahead}</b>명</div><div style="font-size:30px;margin-top:8px">${waitTxt(my)}</div>`}
-    mineHtml=`<div class="card mine"><div class="lbl">내 대기번호 (${t.party}명)</div><div class="big" style="color:var(--pri)">${my}번</div>${st}</div>`;
+    else st=`<div class="hint">내 앞 대기 <b>${aheadOf(my)}</b>명</div><div style="font-size:30px;margin-top:8px">${waitTxt(my)}</div><br><button class="g" id="cancel">대기 취소</button>`;
+    mineHtml=`<div class="card mine"><div class="lbl">내 대기번호 (${t.party}명)</div><div class="big" style="color:${can?"#999":"var(--pri)"}">${my}번</div>${st}</div>`;
   }
+  const pb=S.openAt?`<div class="hint">행사 시작 ${fmt(S.openAt)} · ${fmt(S.openAt-OPEN_BEFORE*60000)}부터 발권</div>`:"";
+  const before=`<div class="card" style="border-color:var(--warn);background:#fff1dd"><div class="big" style="font-size:48px;color:var(--warn)">행사 시작 전</div><div>대기번호 발권은 <b>행사 시작 ${OPEN_BEFORE}분 전</b>부터 가능합니다.</div>${pb}<br><button disabled style="font-size:28px;width:100%">아직 발권할 수 없습니다</button></div>`;
   let take;
-  if(my)take=`<div class="hint">${done?"오늘 참여가 완료되었습니다":"이미 번호를 받으셨습니다"}</div>`;
-  else if(!fit(next))take=`<div class="big" style="font-size:36px;color:var(--warn)">오늘 접수가 마감되었습니다</div><div class="hint">참여해 주셔서 감사합니다 🙏</div>`;
+  if(my)take=`<div class="hint">${can?"대기를 취소하셨습니다":done?"오늘 참여가 완료되었습니다":"이미 번호를 받으셨습니다"}</div>`;
+  else if(!fit(next))take=`<div class="big" style="font-size:36px;color:var(--warn)">오늘 접수가 마감되었습니다</div><div style="font-size:22px">찾아와 주셨는데 모두 도와드리지 못해 <b>정말 죄송합니다.</b><br>다음 행사에서 꼭 다시 만나요 🙏</div>`;
   else take=`<div style="font-size:30px;margin:8px 0">${waitTxt(next)}</div>
     <div class="lbl">함께 그릴 인원 (종이 1장에 1~2명)</div>
     <div class="opt"><button class="${party==1?"":"g"}" data-p="1">1명</button><button class="${party==2?"":"g"}" data-p="2">2명</button></div>
     <button id="take" style="font-size:30px;width:100%">대기번호 받기</button>`;
   const lo=S.closeAt?`<div class="hint" style="margin-top:8px">행사 종료 ${fmt(S.closeAt)} · 접수는 약 <b>${lastOk()}번</b>까지 가능</div>`:"";
+  const cl=Object.keys(S.canceled||{}).map(Number).filter(n=>n>=S.nextNumber).sort((a,b)=>a-b);
   $.innerHTML=`
+  ${opened()?"":before}
   ${mineHtml}
   <div class="card"><div class="lbl">지금 작업 중인 번호</div><div class="nums">${w.length?w.map(n=>`<span class="chip w">${n}번</span>`).join(""):'<span class="hint">대기 중</span>'}</div></div>
-  <div class="card"><div class="lbl">미리 와 계세요 📣</div><div class="nums">${p.length?p.map(n=>`<span class="chip p">${n}번</span>`).join(""):'<span class="hint">없음</span>'}</div></div>
-  <div class="card"><div class="lbl">지금 접수하면 (${next}번 예상)</div>${take}
-    <div class="hint" style="margin-top:8px">1장 약 ${MIN}분 · 진행 테이블 ${S.tableCount}개</div>${lo}</div>
+  <div class="card"><div class="lbl">미리 와 계세요 📣</div><div class="nums">${p.length?p.map(n=>`<span class="chip p">${n}번</span>`).join(""):'<span class="hint">없음</span>'}</div>${cl.length?`<div class="hint" style="margin-top:8px">${cl.map(n=>n+"번(취소)").join(", ")}</div>`:""}</div>
+  ${opened()||my?`<div class="card"><div class="lbl">지금 접수하면 (${next}번 예상)</div>${take}
+    <div class="hint" style="margin-top:8px">1장 약 ${MIN}분 · 진행 테이블 ${S.tableCount}개</div>${lo}</div>`:""}
   <div class="card"><div class="lbl">카카오톡으로 호출 알림 받기</div>
     <p class="hint">오픈채팅방에 입장하시고 <b>내 번호</b>를 남겨주세요.</p>
     <a class="btn kakao" href="${KAKAO}" target="_blank" rel="noopener">💬 카카오톡 오픈채팅 입장</a></div>
   <div class="card notice">⚠️ 예상 시간보다 <b>다소 지연될 수 있습니다.</b><br>봉사자들이 정성껏 그리고 있으니 너그러운 양해 부탁드립니다. 🙏<br><br>⏰ <b>호출 시간에 맞춰 방문해 주세요.</b><br>정해진 시간에 오시지 않으면 처음부터 다시 접수하셔야 합니다. 모두를 위한 약속이니 시간을 꼭 지켜주세요.</div>
   <div style="text-align:center"><a href="#admin" class="hint" style="font-size:14px">운영자</a></div>`;
   document.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{party=+b.dataset.p;renderUser()});
+  const cb=document.getElementById("cancel");if(cb)cb.onclick=()=>{confirming=true;renderUser()};
   const tk=document.getElementById("take");
   if(tk)tk.onclick=async()=>{tk.disabled=true;
     try{const n=await runTransaction(db,async tx=>{const d=(await tx.get(ref)).data();
+        if(!opened(d))throw new Error("notopen");
         if(!fit(d.lastIssued+1,d))throw new Error("closed");
         const n=d.lastIssued+1;tx.update(ref,{lastIssued:n,["parties."+n]:party});return n});
       localStorage.setItem("ticket",JSON.stringify({no:n,ev:S.ev||0,party}));renderUser()}
-    catch(e){alert(e.message==="closed"?"접수가 마감되었습니다.":"접수 실패. 다시 시도해주세요.");renderUser()}};
+    catch(e){alert(e.message==="closed"?"접수가 마감되었습니다.":e.message==="notopen"?"아직 발권 시간이 아닙니다.":"접수 실패. 다시 시도해주세요.");renderUser()}};
 }
 
 function renderPanel(){
-  if(!user){$.innerHTML=`<div class="card"><div class="lbl">운영자 로그인</div><input id="em" type="email" placeholder="이메일"><input id="pw" type="password" placeholder="비밀번호"><button id="li">로그인</button><div class="hint">${msg}</div><br><a href="#">← 돌아가기</a></div>`;
-    document.getElementById("li").onclick=async()=>{try{await signInWithEmailAndPassword(auth,em.value,pw.value);msg=""}catch(e){msg="로그인 실패";renderAdmin()}};return}
-  if(!S){$.innerHTML=`<div class="card">아직 초기화되지 않았습니다.<br><button id="init">시스템 초기화</button></div>`;
-    document.getElementById("init").onclick=()=>setDoc(ref,blank());return}
-  const waiting=Math.max(0,S.lastIssued-S.nextNumber+1),cur=pre();
-  const ctVal=S.closeAt?new Date(S.closeAt).toTimeString().slice(0,5):"";
+  if(!S){$.innerHTML=`<div class="card">아직 초기화되지 않았습니다.<br><button id="init">시스템 초기화</button></div>`;G("init").onclick=()=>setDoc(ref,blank());return}
+  const waiting=waitN(),cur=pre(),nx=nextAct(),tm=ms=>ms?new Date(ms).toTimeString().slice(0,5):"",st=stats(),nm=NM();
+  const cc=Object.keys(S.canceled||{}).length,nsn=(S.noshow||[]).length;
   const wl=[];for(let n=S.nextNumber;n<=S.lastIssued&&wl.length<20;n++)wl.push(n);
-  $.innerHTML=`<div class="card"><div class="lbl">운영 현황</div><div style="font-size:26px">발급 ${S.lastIssued}번 · 대기 <b>${waiting}</b>명 · 다음 호출 ${S.nextNumber}번</div>
+  const W=Object.entries(st.W).sort((a,b)=>b[1].c-a[1].c);
+  $.innerHTML=`<div class="card"><div class="lbl">운영 현황 · 발권 ${opened()?"중 ✅":"전 ⏸"}</div><div style="font-size:26px">발급 ${S.lastIssued}번 · 대기 <b>${waiting}</b>명 · 다음 호출 ${nx<=S.lastIssued?nx+"번":"-"}</div>
    <div class="tbl"><span>작업 테이블 수</span><span><button class="g" id="dn">−</button> <b style="font-size:34px">${S.tableCount}</b> <button id="up">＋</button></span></div>
-   <div class="tbl"><span>행사 마감시각</span><span><input id="ct" type="time" value="${ctVal}" style="width:auto"> <button class="g" id="cx">해제</button></span></div>
-   <div class="hint" style="text-align:left">${S.closeAt?`마감 ${fmt(S.closeAt)} → 접수 가능 마지막 번호 <b>${lastOk()}번</b> (작업 ${MIN}분 포함, 자동 계산)`:"마감시각을 정하면 접수 가능 시간이 자동 계산됩니다."}</div></div>
+   <div class="tbl"><span>행사 시작</span><span><input id="ot" type="time" value="${tm(S.openAt)}" style="width:auto"> <button class="g" id="ox">해제</button></span></div>
+   <div class="tbl"><span>행사 마감</span><span><input id="ct" type="time" value="${tm(S.closeAt)}" style="width:auto"> <button class="g" id="cx">해제</button></span></div>
+   <div class="hint" style="text-align:left">${S.openAt?`발권은 ${fmt(S.openAt-OPEN_BEFORE*60000)}부터 열립니다.`:"⚠️ 행사 시작 시각을 입력해야 발권이 열립니다."}${S.closeAt?`<br>마감 ${fmt(S.closeAt)} → 접수 가능 마지막 번호 <b>${lastOk()}번</b> (작업 ${MIN}분 포함, 자동 계산)`:""}</div></div>
   <div class="card"><div class="lbl">미리 와 계세요 번호 (${S.preMode==="manual"?"직접 설정":"자동"})</div>
-   <div class="nums">${wl.length?wl.map(n=>`<button class="${cur.includes(n)?"o":"g"}" data-pre="${n}">${n}번${pc(n)>1?" (2명)":""}</button>`).join(""):'<span class="hint">대기자 없음</span>'}</div>
-   <div class="hint">번호를 눌러 켜고 끄세요 (주황=안내 중)</div><div class="tbl"><span>자동 안내 인원</span><span><button class="g" id="pd">−</button> <b style="font-size:34px">${S.preN||PRE}</b> <button id="pu">＋</button></span></div>
-   <button class="g" id="auto">자동 모드로 (앞 ${S.preN||PRE}명)</button></div>
-  ${S.tables.slice(0,S.tableCount).map((t,i)=>`<div class="card"><div class="lbl">테이블 ${i+1}</div>
+   <div class="nums">${wl.length?wl.map(n=>cn(n)?`<button class="g" disabled style="text-decoration:line-through">${n}번(취소)</button>`:`<button class="${cur.includes(n)?"o":"g"}" data-pre="${n}">${n}번${pc(n)>1?" (2명)":""}</button>`).join(""):'<span class="hint">대기자 없음</span>'}</div>
+   <div class="hint">번호를 눌러 켜고 끄세요 (주황=안내 중)</div>
+   <div class="tbl"><span>자동 안내 인원</span><span><button class="g" id="pd">−</button> <b style="font-size:34px">${PN()}</b> <button id="pu">＋</button></span></div>
+   <button class="g" id="auto">자동 모드로 (앞 ${PN()}명)</button></div>
+  ${S.tables.slice(0,S.tableCount).map((t,i)=>`<div class="card"><div class="lbl">작업 테이블 ${i+1}</div>
+    <input data-nm="${i}" placeholder="작업자 이름 (여러 명이면 쉼표로)" value="${esc(nm[i])}">
     <div class="big" style="font-size:56px">${t.num?t.num+"번 ("+pc(t.num)+"명)":"비어있음"}</div>
-    ${t.num?`<div class="hint">${fmt(t.startedAt)} 시작</div><button class="r" data-done="${i}">작업 완료</button> `:""}
-    <button class="ok" data-call="${i}" ${S.nextNumber>S.lastIssued?"disabled":""}>다음 번호 호출 (${S.nextNumber}번)</button></div>`).join("")}
+    ${t.num?`<div class="hint">${fmt(t.startedAt)} 시작</div><button class="r" data-done="${i}">작업 완료</button> <button class="g" data-skip="${i}">미방문</button> `:""}
+    <button class="ok" data-call="${i}" ${t.num||nx>S.lastIssued?"disabled":""}>다음 번호 호출 (${nx<=S.lastIssued?nx+"번":"없음"})</button></div>`).join("")}
+  <div class="card"><div class="lbl">📊 오늘의 행사 결산</div>
+   <div class="tbl"><span>대기 발권</span><b>${S.lastIssued}건</b></div>
+   <div class="tbl"><span>└ 작업 완료</span><b>${st.L.length}건</b></div>
+   <div class="tbl"><span>└ 대기 취소</span><b>${cc}건</b></div>
+   <div class="tbl"><span>└ 미방문</span><b>${nsn}건</b></div>
+   <div class="tbl"><span>그림 그린 인원</span><b>${st.ppl}명</b></div>
+   <div class="tbl"><span>작업자</span><b>${W.length}명</b></div>
+   ${W.length?`<div style="text-align:left;margin-top:8px">${W.map(([k,v])=>`<div class="tbl"><span>${esc(k)}</span><span><b>${v.c}장</b> · ${dur(v.ms)}</span></div>`).join("")}</div><div class="hint" style="text-align:left">함께 작업한 경우 각자 1장, 작업시간은 전체 시간이 각자에게 계산됩니다. '작업 완료'를 누른 건만 집계됩니다.</div>`:'<div class="hint">아직 완료된 작업이 없습니다.</div>'}</div>
   <div class="card"><button class="g" id="rs">전체 초기화 (행사 시작 전)</button> <button class="g" id="lo">로그아웃</button><br><a href="#">← 손님 화면</a></div>`;
-  const save=o=>updateDoc(ref,o);
-  const tb=()=>S.tables.map(t=>({...t}));
-  document.getElementById("up").onclick=()=>S.tableCount<5&&save({tableCount:S.tableCount+1});
-  document.getElementById("dn").onclick=()=>S.tableCount>1&&save({tableCount:S.tableCount-1});
-  const $i=id=>document.getElementById(id);
-  $i("ct").onchange=e=>{const v=e.target.value;if(!v)return;const[h,m]=v.split(":");const d=new Date();d.setHours(+h,+m,0,0);save({closeAt:d.getTime()});e.target.blur()};
-  document.getElementById("cx").onclick=()=>save({closeAt:0});
+  const save=o=>updateDoc(ref,o),tb=()=>S.tables.map(t=>({...t}));
+  G("up").onclick=()=>S.tableCount<5&&save({tableCount:S.tableCount+1});
+  G("dn").onclick=()=>S.tableCount>1&&save({tableCount:S.tableCount-1});
+  const setT=(f,v)=>{if(!v)return;const[h,m]=v.split(":"),d=new Date();d.setHours(+h,+m,0,0);save({[f]:d.getTime()})};
+  G("ot").onchange=e=>{setT("openAt",e.target.value);e.target.blur()};
+  G("ct").onchange=e=>{setT("closeAt",e.target.value);e.target.blur()};
+  G("ox").onclick=()=>save({openAt:0});G("cx").onclick=()=>save({closeAt:0});
   document.querySelectorAll("[data-pre]").forEach(b=>b.onclick=()=>{const n=+b.dataset.pre;save({preMode:"manual",preList:cur.includes(n)?cur.filter(x=>x!==n):[...cur,n]})});
-  document.getElementById("pu").onclick=()=>save({preN:Math.min(10,(S.preN||PRE)+1),preMode:"auto",preList:[]});
-  document.getElementById("pd").onclick=()=>save({preN:Math.max(0,(S.preN||PRE)-1),preMode:"auto",preList:[]});
-  document.getElementById("auto").onclick=()=>save({preMode:"auto",preList:[]});
-  document.querySelectorAll("[data-call]").forEach(b=>b.onclick=()=>{const t=tb();t[+b.dataset.call]={num:S.nextNumber,startedAt:Date.now()};save({tables:t,nextNumber:S.nextNumber+1})});
-  document.querySelectorAll("[data-done]").forEach(b=>b.onclick=()=>{const t=tb();t[+b.dataset.done]={num:0,startedAt:0};save({tables:t})});
-  document.getElementById("rs").onclick=()=>confirm("모든 번호를 0으로 초기화합니다. 계속할까요?")&&setDoc(ref,blank());
-  document.getElementById("lo").onclick=()=>signOut(auth);
+  G("pu").onclick=()=>save({preN:Math.min(10,PN()+1),preMode:"auto",preList:[]});
+  G("pd").onclick=()=>save({preN:Math.max(0,PN()-1),preMode:"auto",preList:[]});
+  G("auto").onclick=()=>save({preMode:"auto",preList:[]});
+  document.querySelectorAll("[data-nm]").forEach(i=>i.onchange=()=>{const a=NM();a[+i.dataset.nm]=i.value;save({names:a})});
+  document.querySelectorAll("[data-call]").forEach(b=>b.onclick=()=>{const n=nextAct();if(n>S.lastIssued)return;const t=tb();t[+b.dataset.call]={num:n,startedAt:Date.now()};save({tables:t,nextNumber:n+1})});
+  document.querySelectorAll("[data-done]").forEach(b=>b.onclick=()=>{const i=+b.dataset.done,c=S.tables[i],t=tb();t[i]={num:0,startedAt:0};
+    save({tables:t,log:arrayUnion({n:c.num,t:i+1,w:wk(i),s:c.startedAt,e:Date.now(),p:pc(c.num)})})});
+  document.querySelectorAll("[data-skip]").forEach(b=>b.onclick=()=>{const i=+b.dataset.skip,c=S.tables[i],t=tb();
+    if(!confirm(c.num+"번을 미방문 처리할까요? (손님은 처음부터 다시 접수해야 합니다)"))return;t[i]={num:0,startedAt:0};save({tables:t,noshow:arrayUnion(c.num)})});
+  G("rs").onclick=()=>confirm("모든 번호와 결산 기록을 초기화합니다. 계속할까요?")&&setDoc(ref,blank());
+  G("lo").onclick=()=>signOut(auth);
 }
-
 
 const esc=t=>String(t==null?"":t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const F={mode:"login",name:"",msg:"",email:"",pw:""};
@@ -233,7 +267,7 @@ onAuthStateChanged(auth,u=>{
   }
   render()});
 window.addEventListener("hashchange",render);
-setInterval(render,30000); // 예상시간 갱신(서버 읽기 없음)
+setInterval(render,15000); // 예상시간 갱신(서버 읽기 없음)
 </script>
 </body>
 </html>
