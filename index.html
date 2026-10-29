@@ -50,7 +50,7 @@ const firebaseConfig={
   appId: "1:871863765370:web:071694931291140decaec3",
   measurementId: "G-0C2H5V66PZ"
 };
-const KAKAO="https://open.kakao.com/o/pOFJ9BUi";
+const KAKAO="https://open.kakao.com/o/gpM89HUi";
 const MIN=20;          // 대기번호 1장당 소요시간(분)
 const OPEN_BEFORE=10;  // 행사 시작 몇 분 전부터 발권할지
 const PRE=3;           // '미리 와 계세요' 안내 인원
@@ -116,7 +116,7 @@ function renderUser(){
     if(can)st=`<div class="big" style="color:#c0392b;font-size:48px">(취소)</div><div class="hint">대기가 취소되었습니다.<br>오늘은 다시 접수할 수 없습니다.</div>`;
     else if(isWork)st=`<div class="big" style="color:var(--ok)">작업 중</div><div class="hint">테이블로 와주세요 🙌</div>`;
     else if(done)st=`<div class="big">완료</div><div class="hint">참여해 주셔서 감사합니다 💙<br>오늘은 1인 1회 참여입니다.</div>`;
-    else st=`<div class="hint">내 앞 대기 <b>${aheadOf(my)}</b>명</div><div style="font-size:30px;margin-top:8px">${waitTxt(my)}</div><br><button class="g" id="cancel">대기 취소</button>`;
+    else st=`<div class="hint">내 앞 대기 <b>${aheadOf(my)}</b>명</div><div style="font-size:30px;margin-top:8px">${waitTxt(my)}</div><div style="font-size:20px;color:var(--warn);margin:10px 0"><b>약속된 시간에 못 오실 경우 꼭 취소 부탁드려요.</b></div><button class="g" id="cancel">대기 취소</button>`;
     mineHtml=`<div class="card mine"><div class="lbl">내 대기번호 (${t.party}명)</div><div class="big" style="color:${can?"#999":"var(--pri)"}">${my}번</div>${st}</div>`;
   }
   const pb=S.openAt?`<div class="hint">행사 시작 ${fmt(S.openAt)} · ${fmt(S.openAt-OPEN_BEFORE*60000)}부터 발권</div>`:"";
@@ -127,18 +127,20 @@ function renderUser(){
   else take=`<div style="font-size:30px;margin:8px 0">${waitTxt(next)}</div>
     <div class="lbl">함께 그릴 인원 (종이 1장에 1~2명)</div>
     <div class="opt"><button class="${party==1?"":"g"}" data-p="1">1명</button><button class="${party==2?"":"g"}" data-p="2">2명</button></div>
+    <div style="font-size:22px;color:var(--warn);margin:6px 0 12px"><b>약속된 시간에 못 오실 경우<br>꼭 취소 부탁드려요.</b></div>
     <button id="take" style="font-size:30px;width:100%">대기번호 받기</button>`;
-  const lo=S.closeAt?`<div class="hint" style="margin-top:8px">행사 종료 ${fmt(S.closeAt)} · 접수는 약 <b>${lastOk()}번</b>까지 가능</div>`:"";
+  const canTake=!my&&fit(next);
+  const lo=S.closeAt&&canTake?`<div class="hint" style="margin-top:8px">행사 종료 ${fmt(S.closeAt)} · 접수는 약 <b>${lastOk()}번</b>까지 가능</div>`:"";
   const cl=Object.keys(S.canceled||{}).map(Number).filter(n=>n>=S.nextNumber).sort((a,b)=>a-b);
   $.innerHTML=`
   ${opened()?"":before}
   ${mineHtml}
   <div class="card"><div class="lbl">지금 작업 중인 번호</div><div class="nums">${w.length?w.map(n=>`<span class="chip w">${n}번</span>`).join(""):'<span class="hint">대기 중</span>'}</div></div>
-  <div class="card"><div class="lbl">미리 와 계세요 📣</div><div class="nums">${p.length?p.map(n=>`<span class="chip p">${n}번</span>`).join(""):'<span class="hint">없음</span>'}</div>${cl.length?`<div class="hint" style="margin-top:8px">${cl.map(n=>n+"번(취소)").join(", ")}</div>`:""}</div>
-  ${opened()||my?`<div class="card"><div class="lbl">지금 접수하면 (${next}번 예상)</div>${take}
-    <div class="hint" style="margin-top:8px">1장 약 ${MIN}분 · 진행 테이블 ${S.tableCount}개</div>${lo}</div>`:""}
+  <div class="card"><div class="lbl">다음 차례입니다.<br>부스로 와서 미리 대기해주세요. 📣</div><div class="nums">${p.length?p.map(n=>`<span class="chip p">${n}번</span>`).join(""):'<span class="hint">없음</span>'}</div>${cl.length?`<div class="hint" style="margin-top:8px">${cl.map(n=>n+"번(취소)").join(", ")}</div>`:""}</div>
+  ${opened()||my?`<div class="card"><div class="lbl">${canTake?`지금 접수하면 (${next}번 예상)`:"접수 안내"}</div>${take}
+    ${canTake?`<div class="hint" style="margin-top:8px">1장 약 ${MIN}분 · 진행 테이블 ${S.tableCount}개</div>`:""}${lo}</div>`:""}
   <div class="card"><div class="lbl">카카오톡으로 호출 알림 받기</div>
-    <p class="hint">오픈채팅방에 입장하시고 <b>내 번호</b>를 남겨주세요.</p>
+    <p class="hint">부재시 오픈채팅방에서 다음 대기번호를 안내드립니다.<br>(수기안내라 다소 미흡할 수 있습니다.)</p>
     <a class="btn kakao" href="${KAKAO}" target="_blank" rel="noopener">💬 카카오톡 오픈채팅 입장</a></div>
   <div class="card notice">⚠️ 예상 시간보다 <b>다소 지연될 수 있습니다.</b><br>봉사자들이 정성껏 그리고 있으니 너그러운 양해 부탁드립니다. 🙏<br><br>⏰ <b>호출 시간에 맞춰 방문해 주세요.</b><br>정해진 시간에 오시지 않으면 처음부터 다시 접수하셔야 합니다. 모두를 위한 약속이니 시간을 꼭 지켜주세요.</div>
   <div style="text-align:center"><a href="#admin" class="hint" style="font-size:14px">운영자</a></div>`;
