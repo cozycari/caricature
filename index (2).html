@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>캐리커쳐 봉사단 현장 대기</title>
+<style>
+:root{--bg:#fffaf0;--card:#fff;--tx:#1b1b1b;--sub:#555;--pri:#1a5fd0;--ok:#0b7a3b;--warn:#c25b00;--bd:#e3d9c4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:"Noto Sans KR","Malgun Gothic",sans-serif;font-size:22px;line-height:1.5;padding:0 0 40px}
+header{background:var(--pri);color:#fff;padding:18px 16px;text-align:center}
+header h1{margin:0;font-size:28px}header p{margin:4px 0 0;font-size:18px;opacity:.9}
+main{max-width:640px;margin:0 auto;padding:12px}
+.card{background:var(--card);border:3px solid var(--bd);border-radius:20px;padding:18px;margin:14px 0;text-align:center}
+.lbl{font-size:22px;font-weight:700;color:var(--sub)}
+.big{font-size:72px;font-weight:900;line-height:1.1;margin:6px 0}
+.nums{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+.chip{font-size:44px;font-weight:900;border-radius:14px;padding:4px 18px;background:#e8f0fe;color:var(--pri)}
+.chip.w{background:#e6f6ec;color:var(--ok)}
+.chip.p{background:#fff1dd;color:var(--warn)}
+.hint{font-size:20px;color:var(--sub)}
+button,.btn{font:inherit;font-weight:700;border:0;border-radius:16px;padding:16px 22px;background:var(--pri);color:#fff;cursor:pointer;display:inline-block;text-decoration:none;min-height:56px}
+button.g{background:#777}button.r{background:#c0392b}button.ok{background:var(--ok)}
+button:disabled{opacity:.4}
+.kakao{background:#fee500;color:#191600;width:100%;font-size:24px}
+.mine{border-color:var(--pri);background:#f4f8ff}
+.notice{background:#fff3cd;border-color:#f0d98a;font-size:21px;text-align:left}
+.tbl{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;text-align:left;border-bottom:1px solid var(--bd);padding:10px 0}
+input{font:inherit;padding:12px;border:2px solid var(--bd);border-radius:12px;width:100%;margin:6px 0}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header><h1>🎨 캐리커쳐 현장 대기</h1><p>사)남양주자원봉사센터 캐리커쳐 봉사단</p></header>
+<main id="app"><div class="card">불러오는 중…</div></main>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getFirestore,doc,onSnapshot,runTransaction,setDoc,updateDoc} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getAuth,signInWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+// ▼▼ Firebase 콘솔 > 프로젝트 설정 > 내 앱(웹)에서 복사한 값으로 교체 ▼▼
+const firebaseConfig={
+  apiKey:"YOUR_API_KEY",
+  authDomain:"YOUR_PROJECT.firebaseapp.com",
+  projectId:"YOUR_PROJECT",
+  appId:"YOUR_APP_ID"
+};
+const KAKAO="https://open.kakao.com/o/pOFJ9BUi";
+const MIN=20;          // 대기번호 1장당 소요시간(분)
+const PRE=3;           // '미리 와 계세요' 안내 인원
+// ▲▲▲▲▲
+
+const app=initializeApp(firebaseConfig),db=getFirestore(app),auth=getAuth(app);
+const ref=doc(db,"meta","state");
+const $=document.getElementById("app");
+const isAdmin=()=>location.hash==="#admin";
+let S=null,user=null,msg="";
+
+const blank=()=>({lastIssued:0,nextNumber:1,tableCount:1,tables:Array.from({length:5},()=>({num:0,startedAt:0}))});
+const fmt=t=>new Date(t).toLocaleTimeString("ko-KR",{hour:"numeric",minute:"2-digit"});
+const mins=ms=>Math.max(0,Math.ceil(ms/60000));
+const myNo=()=>+localStorage.getItem("myNo")||0;
+
+// 번호 n의 시작 예상시각 (작업 중인 테이블 종료시각 + 대기순서 반영, 테이블 수가 늘면 자동으로 빨라짐)
+function startAt(n){
+  const now=Date.now();
+  const free=S.tables.slice(0,S.tableCount).map(t=>t.num?Math.max(now,t.startedAt+MIN*60000):now);
+  for(let k=S.nextNumber;k<=n;k++){
+    let i=0;free.forEach((f,j)=>{if(f<free[i])i=j});
+    const s=free[i];free[i]=s+MIN*60000;
+    if(k===n)return s;
+  }
+  return now;
+}
+const waitTxt=n=>{const s=startAt(n),m=mins(s-Date.now());return m<=0?`<b>지금 바로</b> 가능 (${fmt(s)})`:`약 <b>${m}분</b> 후 · ${fmt(s)} 시작 예상`};
+
+function working(){return S.tables.slice(0,S.tableCount).map(t=>t.num).filter(Boolean)}
+function pre(){const a=[];for(let n=S.nextNumber;n<=S.lastIssued&&a.length<PRE;n++)a.push(n);return a}
+
+function renderUser(){
+  if(!S){$.innerHTML='<div class="card">현장 접수 준비 중입니다.<br>잠시 후 다시 확인해주세요.</div>';return}
+  const w=working(),p=pre(),my=myNo(),next=S.lastIssued+1;
+  let mineHtml="";
+  if(my){
+    let st;
+    if(w.includes(my))st=`<div class="big" style="color:var(--ok)">작업 중</div><div class="hint">테이블로 와주세요 🙌</div>`;
+    else if(my<S.nextNumber)st=`<div class="big">완료</div><div class="hint">참여해 주셔서 감사합니다 💙</div>`;
+    else{const ahead=my-S.nextNumber;st=`<div class="hint">내 앞 대기 <b>${ahead}</b>명</div><div style="font-size:30px;margin-top:8px">${waitTxt(my)}</div>`}
+    mineHtml=`<div class="card mine"><div class="lbl">내 대기번호</div><div class="big" style="color:var(--pri)">${my}번</div>${st}${my<S.nextNumber?'<br><button class="g" id="forget">번호 지우기</button>':""}</div>`;
+  }
+  $.innerHTML=`
+  ${mineHtml}
+  <div class="card"><div class="lbl">지금 작업 중인 번호</div><div class="nums">${w.length?w.map(n=>`<span class="chip w">${n}번</span>`).join(""):'<span class="hint">대기 중</span>'}</div></div>
+  <div class="card"><div class="lbl">미리 와 계세요 📣</div><div class="nums">${p.length?p.map(n=>`<span class="chip p">${n}번</span>`).join(""):'<span class="hint">없음</span>'}</div></div>
+  <div class="card"><div class="lbl">지금 접수하면 (${next}번 예상)</div><div style="font-size:30px;margin:8px 0">${waitTxt(next)}</div>
+    ${my&&my>=S.nextNumber?'<div class="hint">이미 번호를 받으셨습니다</div>':'<button id="take" style="font-size:30px;width:100%">대기번호 받기</button>'}
+    <div class="hint" style="margin-top:8px">1인 약 ${MIN}분 · 진행 테이블 ${S.tableCount}개</div></div>
+  <div class="card"><div class="lbl">카카오톡으로 호출 알림 받기</div>
+    <p class="hint">오픈채팅방에 입장하시고 <b>내 번호</b>를 남겨주세요.</p>
+    <a class="btn kakao" href="${KAKAO}" target="_blank" rel="noopener">💬 카카오톡 오픈채팅 입장</a></div>
+  <div class="card notice">⚠️ 예상 시간보다 <b>다소 지연될 수 있습니다.</b><br>봉사자들이 정성껏 그리고 있으니 너그러운 양해 부탁드립니다. 🙏</div>
+  <div style="text-align:center"><a href="#admin" class="hint" style="font-size:14px">운영자</a></div>`;
+  const t=document.getElementById("take");
+  if(t)t.onclick=async()=>{t.disabled=true;
+    try{const n=await runTransaction(db,async tx=>{const d=(await tx.get(ref)).data();tx.update(ref,{lastIssued:d.lastIssued+1});return d.lastIssued+1});
+      localStorage.setItem("myNo",n)}catch(e){alert("접수 실패. 다시 시도해주세요.")}};
+  const f=document.getElementById("forget");if(f)f.onclick=()=>{localStorage.removeItem("myNo");renderUser()};
+}
+
+function renderAdmin(){
+  if(!user){$.innerHTML=`<div class="card"><div class="lbl">운영자 로그인</div><input id="em" type="email" placeholder="이메일"><input id="pw" type="password" placeholder="비밀번호"><button id="li">로그인</button><div class="hint">${msg}</div><br><a href="#">← 돌아가기</a></div>`;
+    document.getElementById("li").onclick=async()=>{try{await signInWithEmailAndPassword(auth,em.value,pw.value);msg=""}catch(e){msg="로그인 실패";renderAdmin()}};return}
+  if(!S){$.innerHTML=`<div class="card">아직 초기화되지 않았습니다.<br><button id="init">시스템 초기화</button></div>`;
+    document.getElementById("init").onclick=()=>setDoc(ref,blank());return}
+  const waiting=Math.max(0,S.lastIssued-S.nextNumber+1);
+  $.innerHTML=`<div class="card"><div class="lbl">운영 현황</div><div style="font-size:26px">발급 ${S.lastIssued}번 · 대기 <b>${waiting}</b>명 · 다음 호출 ${S.nextNumber}번</div>
+   <div class="tbl"><span>작업 테이블 수</span><span><button class="g" id="dn">−</button> <b style="font-size:34px">${S.tableCount}</b> <button id="up">＋</button></span></div></div>
+  ${S.tables.slice(0,S.tableCount).map((t,i)=>`<div class="card"><div class="lbl">테이블 ${i+1}</div>
+    <div class="big" style="font-size:56px">${t.num?t.num+"번":"비어있음"}</div>
+    ${t.num?`<div class="hint">${fmt(t.startedAt)} 시작</div><button class="r" data-done="${i}">작업 완료</button> `:""}
+    <button class="ok" data-call="${i}" ${S.nextNumber>S.lastIssued?"disabled":""}>다음 번호 호출 (${S.nextNumber}번)</button></div>`).join("")}
+  <div class="card"><button class="g" id="rs">전체 초기화 (행사 시작 전)</button> <button class="g" id="lo">로그아웃</button><br><a href="#">← 손님 화면</a></div>`;
+  const save=o=>updateDoc(ref,o);
+  const tb=()=>S.tables.map(t=>({...t}));
+  up.onclick=()=>S.tableCount<5&&save({tableCount:S.tableCount+1});
+  dn.onclick=()=>S.tableCount>1&&save({tableCount:S.tableCount-1});
+  document.querySelectorAll("[data-call]").forEach(b=>b.onclick=()=>{const t=tb();t[+b.dataset.call]={num:S.nextNumber,startedAt:Date.now()};save({tables:t,nextNumber:S.nextNumber+1})});
+  document.querySelectorAll("[data-done]").forEach(b=>b.onclick=()=>{const t=tb();t[+b.dataset.done]={num:0,startedAt:0};save({tables:t})});
+  rs.onclick=()=>confirm("모든 번호를 0으로 초기화합니다. 계속할까요?")&&setDoc(ref,blank());
+  lo.onclick=()=>signOut(auth);
+}
+
+const render=()=>{if(document.activeElement&&document.activeElement.tagName==="INPUT")return;isAdmin()?renderAdmin():renderUser()};
+onSnapshot(ref,s=>{S=s.exists()?s.data():null;render()},()=>{$.innerHTML='<div class="card">연결에 문제가 있습니다. 새로고침 해주세요.</div>'});
+onAuthStateChanged(auth,u=>{user=u;render()});
+window.addEventListener("hashchange",render);
+setInterval(render,30000); // 예상시간 갱신(서버 읽기 없음)
+</script>
+</body>
+</html>
